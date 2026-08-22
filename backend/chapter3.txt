@@ -1,0 +1,50 @@
+# CHAPTER 3 - PROPOSED METHODOLOGY
+
+## 3.1 Detailed architecture explanation
+The Smart Parking Occupancy Detection System is a highly complex, multi-tiered architecture designed around the principles of infinite scalability, fault tolerance, and modularity. The architecture is segregated into three distinct physical and logical tiers: the Decentralized Edge Tier, the Centralized Cloud Tier, and the Client Presentation Tier.
+The Decentralized Edge Tier consists of physical hardware nodes (e.g., NVIDIA Jetson devices or localized server PCs) deployed directly at the parking facility, connected to the local IP camera network. These nodes are responsible for ingesting the raw RTSP video streams, extracting frames, executing YOLOv8 localization, processing the Hybrid OCR, and running the VGG16 binary classification tensors. 
+The Centralized Cloud Tier is a FastAPI Python server connected to a relational database (PostgreSQL/SQLite). Because the heavy tensor operations occur at the edge, the cloud tier only receives extremely lightweight JSON payloads (e.g., `{"slot_id": "A-05", "status": "occupied"}`). This allows a single, inexpensive cloud instance to handle data from thousands of edge nodes simultaneously.
+The Client Presentation Tier is a dynamic React.js application. It maintains an active WebSocket connection with the cloud tier, receiving real-time state mutations. The user interface updates the visual parking map instantly, providing a frictionless experience without the need for manual page refreshes.
+
+## 3.2 VGG16 architecture
+The core mathematical engine determining occupancy is the VGG16 Convolutional Neural Network. Developed by the Visual Geometry Group, VGG16 is renowned for its uniform, deep structure. The network consists of 13 convolutional layers and 3 fully connected (dense) layers. The defining characteristic of VGG16 is its exclusive use of small 3x3 receptive fields (convolution filters) with a stride of 1 pixel, interspersed with 2x2 max-pooling layers with a stride of 2.
+By stacking these small 3x3 filters deeply, the network achieves an effectively large receptive field while utilizing far fewer parameters than a single large filter (e.g., 7x7) would require. This depth allows the network to learn highly complex, non-linear hierarchical representations of features. The lower layers learn to detect simple edges and lines (lane markings), while the deeper layers learn to recognize complex geometric structures (tires, windshields, vehicle chassis profiles).
+
+## 3.3 CNN fundamentals
+Convolutional Neural Networks (CNNs) process spatial data through a mathematical operation called convolution. Given an input image matrix I and a filter matrix K (kernel), the convolution operation produces a feature map S. Mathematically, the continuous convolution in two dimensions is expressed as:
+[FIGURE 3.1: Mathematical Equation of 2D Convolution]
+S(i, j) = sum_m sum_n I(i - m, j - n) * K(m, n)
+This operation slides the filter across the image, computing the dot product at every position. To introduce non-linearity, which is essential for learning complex patterns, the output is passed through an activation function. The Rectified Linear Unit (ReLU), defined as f(x) = max(0, x), is universally applied after each convolution in the VGG16 architecture. Pooling layers are then utilized to down-sample the spatial dimensions, reducing computational load and providing translational invariance.
+
+## 3.4 Transfer learning
+Training a deep network like VGG16 (which contains over 138 million parameters) from scratch requires massive datasets and immense computational power, and it risks severe overfitting. To circumvent this, the methodology relies heavily on Transfer Learning.
+The VGG16 base is instantiated with weights that were pre-trained on the ImageNet dataset—a colossal corpus of 14 million images categorized into 1,000 classes. The fundamental premise of transfer learning is that the low-level features learned by the early layers of the network (edge detection, color blobs) are universally applicable to almost any visual task. The top three fully connected layers of the original VGG16 are discarded. The convolutional base is 'frozen' (its weights are locked), and a new, custom binary classification head is appended. Only this new head is trained initially, allowing it to adapt to the powerful feature maps extracted by the pre-trained base.
+
+## 3.5 Hybrid OCR explanation
+To combat the devastating issue of ANPR hallucination on foreign plates, a novel Hybrid OCR Engine was engineered. The engine dynamically fuses two distinct paradigms: LPRNet (a sequence-based CTC decoder optimized for regional precision) and EasyOCR (a CRAFT/CRNN framework optimized for global typographical variance).
+When a license plate is cropped by YOLOv8, it is passed sequentially to both engines. The critical innovation is the Hybrid Decision Logic. The system evaluates the output of LPRNet against a rigorous Regular Expression (Regex) that mathematically defines the structural topology of the local region (e.g., `^[A-Z]{2}\d{1,2}[A-Z]{1,2}\d{3,4}$` for Indian plates). 
+If LPRNet's output matches this topology perfectly, the system assigns it maximum confidence, leveraging its superior accuracy on blurry local plates. If the plate is international (e.g., 'NU26 CAR'), LPRNet will hallucinate to fit the 10-character template. The regex engine immediately detects this structural anomaly, rejects the LPRNet output, and falls back to the EasyOCR output, which naturally decodes the concise international typography perfectly.
+
+## 3.6 Edge computing architecture
+The Edge Computing paradigm completely decentralizes the system's inference load. An Edge Node acts as an autonomous intelligent agent. Written in Python, the edge service utilizes multi-threading to handle I/O bound operations (fetching RTSP frames) and CPU/GPU bound operations (tensor inference) concurrently.
+The node contains a spatial mapping configuration (a JSON array of polygon coordinates) defining every parking slot in the camera's view. For every frame processed, the node iterates through these polygons, calculates the bounding box, extracts the pixel matrix, applies a perspective transform (homography) to flatten the image, and feeds the standardized 224x224 crop to the VGG16 tensor. The result is evaluated against a 0.5 threshold, and the boolean state is packaged into an asynchronous HTTP POST request to the cloud.
+
+## 3.7 Workflow description
+The complete workflow proceeds as follows:
+1. Vehicle enters the facility triggering the Entry Camera.
+2. Edge Node captures the frame; YOLOv8 localizes the vehicle and crops the license plate.
+3. Hybrid OCR Engine analyzes the plate, running LPRNet and EasyOCR concurrently.
+4. Regex heuristics resolve the correct plate string; the payload is sent to the FastAPI server to log entry time.
+5. Vehicle navigates the lot. Overhead cameras continuously stream to their respective Edge Nodes.
+6. Edge Nodes extract slot ROIs, run the VGG16 classifier, and transmit any state changes (Vacant to Occupied).
+7. FastAPI server updates the PostgreSQL database and triggers a WebSocket broadcast.
+8. The React.js dashboard receives the broadcast and updates the live UI map instantly, guiding the next user.
+
+## 3.8 Mathematical model
+The binary classification head of the VGG16 model is mathematically defined by its dense layers and final activation function. The feature map output by the final pooling layer is flattened into a vector 'x'. The dense layer applies a linear transformation: z = W*x + b, where W is the weight matrix and b is the bias vector. The ReLU activation is applied: a = max(0, z).
+The final output layer contains a single neuron that utilizes the Sigmoid activation function to map the unbounded continuous output into a strict probability distribution between 0 and 1:
+[FIGURE 3.2: Sigmoid Activation Mathematical Function]
+S(z) = 1 / (1 + e^-z)
+The network is optimized using Binary Cross-Entropy loss, defined as:
+L = - (y * log(p) + (1 - y) * log(1 - p))
+Where 'y' is the ground truth binary label, and 'p' is the predicted probability S(z). The gradients of this loss function with respect to the weights are computed using backpropagation and updated via the Stochastic Gradient Descent (SGD) algorithm.

@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+opencv-python
+tensorflow
+keras
+easyocr
+firebase-admin
+sqlalchemy
+websockets
+numpy
+pillow
+python-multipart
+pydantic
+python-dotenv
+apscheduler
+ultralytics>=8.0.0
