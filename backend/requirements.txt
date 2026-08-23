@@ -14,3 +14,4 @@ pydantic
 python-dotenv
 apscheduler
 ultralytics>=8.0.0
+pillow-avif-plugin
